@@ -30,6 +30,16 @@ struct SyncStats {
     errors: u64,
 }
 
+#[derive(Default)]
+struct DeployStats {
+    copied: u64,
+    skipped: u64,
+    dirs: u64,
+    bytes: u64,
+    errors: u64,
+    overwritten: u64,
+}
+
 pub struct App {
     pub home_dir: PathBuf,
     pub current_dir: PathBuf,
@@ -48,6 +58,8 @@ pub struct App {
 
     pub status: String,
     pub should_quit: bool,
+
+    pub awaiting_confirm: Option<String>,
 }
 
 impl App {
@@ -56,12 +68,10 @@ impl App {
         let config = config::load_config();
         let ignored_paths = config::load_ignores();
         let mut ignored: HashSet<String> = ignored_paths.into_iter().collect();
-
         // 默认忽略 sync_dir
         if let Ok(rel) = config.sync_dir.strip_prefix(&home_dir) {
             ignored.insert(rel.to_string_lossy().to_string());
         }
-
         let mut app = Self {
             current_dir: home_dir.clone(),
             home_dir,
@@ -76,6 +86,7 @@ impl App {
             full_ignored: 0,
             status: String::new(),
             should_quit: false,
+            awaiting_confirm: None,
         };
         app.load_entries();
         app
@@ -208,15 +219,20 @@ impl App {
 
     pub fn enter_directory(&mut self) {
         if let Some(entry) = self.entries.get(self.selected)
-            && entry.is_dir
-        {
-            self.current_dir = entry.path.clone();
-            self.selected = 0;
-            self.load_entries();
-        }
+            && entry.is_dir {
+                self.current_dir = entry.path.clone();
+                self.selected = 0;
+                self.load_entries();
+            }
     }
 
     pub fn go_back(&mut self) {
+        if self.awaiting_confirm.is_some() {
+            self.awaiting_confirm = None;
+            self.status.clear();
+            return;
+        }
+
         if self.current_dir == self.home_dir {
             return;
         }
@@ -299,7 +315,58 @@ impl App {
         self.load_entries();
     }
 
-    pub fn sync(&mut self) {
+    pub fn request_confirm(&mut self, action: &str) {
+        self.awaiting_confirm = Some(action.to_string());
+        match action {
+            "sync_all" => self.status = "Sync ALL to repo? (y/N)".into(),
+            "deploy_all" => self.status = "Deploy ALL to home? (y/N)".into(),
+            _ => {}
+        }
+    }
+
+    pub fn confirm_action(&mut self) {
+        let action = self.awaiting_confirm.take();
+        match action.as_deref() {
+            Some("sync_all") => self.sync_all(),
+            Some("deploy_all") => self.deploy_all(),
+            _ => self.status.clear(),
+        }
+    }
+
+    pub fn cancel_confirm(&mut self) {
+        self.awaiting_confirm = None;
+        self.status = "Cancelled".into();
+    }
+
+    pub fn sync_selected(&mut self) {
+        if let Some(entry) = self.entries.get(self.selected).cloned() {
+            if self.is_ignored(&entry.path) {
+                self.status = format!("Ignored: {}", self.relative_path(&entry.path));
+                return;
+            }
+
+            let rel = self.relative_path(&entry.path);
+            let dest_path = self.config.sync_dir.join(&rel);
+
+            let mut stats = SyncStats::default();
+
+            if entry.is_dir {
+                let _ = fs::create_dir_all(&dest_path);
+                stats.dirs += 1;
+                if let Err(e) = self.sync_walk(&entry.path, &mut stats) {
+                    self.status = format!("Sync FAILED: {}", e);
+                    return;
+                }
+                self.clean_walk(&dest_path, &mut stats);
+            } else {
+                self.sync_file(&entry.path, &dest_path, &mut stats);
+            }
+
+            self.status = self.format_sync_status(&stats);
+        }
+    }
+
+    pub fn sync_all(&mut self) {
         let sync_dir = self.config.sync_dir.clone();
 
         if let Err(e) = fs::create_dir_all(&sync_dir) {
@@ -315,12 +382,14 @@ impl App {
         }
 
         self.clean_walk(&sync_dir, &mut stats);
+        self.status = self.format_sync_status(&stats);
+    }
 
+    fn format_sync_status(&self, stats: &SyncStats) -> String {
         let mut parts = Vec::new();
-
         if stats.copied > 0 {
             parts.push(format!(
-                "copied {} ({})",
+                "↑ copied {} ({})",
                 stats.copied,
                 format_size(stats.bytes)
             ));
@@ -339,9 +408,71 @@ impl App {
         }
 
         if parts.is_empty() {
-            self.status = "Already up to date ✓".into();
+            "Already up to date ✓".into()
         } else {
-            self.status = parts.join(" │ ");
+            parts.join(" │ ")
+        }
+    }
+
+    fn sync_file(&self, src_path: &Path, dest_path: &Path, stats: &mut SyncStats) {
+        #[cfg(unix)]
+        {
+            if src_path.is_symlink() {
+                if let Ok(target) = fs::read_link(src_path) {
+                    if dest_path.is_symlink()
+                        && let Ok(existing_target) = fs::read_link(dest_path)
+                            && existing_target == target {
+                                stats.skipped += 1;
+                                return;
+                            }
+
+                    if dest_path.exists() || dest_path.is_symlink() {
+                        let _ = fs::remove_file(dest_path);
+                    }
+                    match std::os::unix::fs::symlink(&target, dest_path) {
+                        Ok(_) => {
+                            stats.copied += 1;
+                        }
+                        Err(_) => stats.errors += 1,
+                    }
+                }
+                return;
+            }
+        }
+
+        let src_meta = match fs::metadata(src_path) {
+            Ok(m) => m,
+            Err(_) => {
+                stats.errors += 1;
+                return;
+            }
+        };
+
+        let should_copy = match fs::metadata(dest_path) {
+            Ok(dest_meta) => {
+                let src_time = src_meta.modified().ok();
+                let dest_time = dest_meta.modified().ok();
+                match (src_time, dest_time) {
+                    (Some(st), Some(dt)) => st > dt || src_meta.len() != dest_meta.len(),
+                    _ => true,
+                }
+            }
+            Err(_) => true,
+        };
+
+        if should_copy {
+            if let Some(parent) = dest_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            match fs::copy(src_path, dest_path) {
+                Ok(_) => {
+                    stats.copied += 1;
+                    stats.bytes += src_meta.len();
+                }
+                Err(_) => stats.errors += 1,
+            }
+        } else {
+            stats.skipped += 1;
         }
     }
 
@@ -355,12 +486,10 @@ impl App {
                 continue;
             }
 
-            // 跳过 sync 目录自身
             if src_path == self.config.sync_dir || src_path.starts_with(&self.config.sync_dir) {
                 continue;
             }
 
-            // 被忽略则跳过
             if self.is_ignored(&src_path) {
                 continue;
             }
@@ -375,58 +504,7 @@ impl App {
                 }
                 self.sync_walk(&src_path, stats)?;
             } else {
-                #[cfg(unix)]
-                {
-                    if src_path.is_symlink() {
-                        let target = fs::read_link(&src_path)?;
-
-                        if dest_path.is_symlink()
-                            && let Ok(existing_target) = fs::read_link(&dest_path)
-                            && existing_target == target
-                        {
-                            stats.skipped += 1;
-                            continue;
-                        }
-
-                        if dest_path.exists() || dest_path.is_symlink() {
-                            let _ = fs::remove_file(&dest_path);
-                        }
-                        match std::os::unix::fs::symlink(&target, &dest_path) {
-                            Ok(_) => {
-                                stats.copied += 1;
-                                stats.bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
-                            }
-                            Err(_) => stats.errors += 1,
-                        }
-                        continue;
-                    }
-                }
-
-                // 普通文件：比较修改时间判断是否需要复制
-                let src_meta = entry.metadata()?;
-                let should_copy = match fs::metadata(&dest_path) {
-                    Ok(dest_meta) => {
-                        let src_time = src_meta.modified().ok();
-                        let dest_time = dest_meta.modified().ok();
-                        match (src_time, dest_time) {
-                            (Some(st), Some(dt)) => st > dt || src_meta.len() != dest_meta.len(),
-                            _ => true,
-                        }
-                    }
-                    Err(_) => true, // 目标不存在，需要复制
-                };
-
-                if should_copy {
-                    match fs::copy(&src_path, &dest_path) {
-                        Ok(_) => {
-                            stats.copied += 1;
-                            stats.bytes += src_meta.len();
-                        }
-                        Err(_) => stats.errors += 1,
-                    }
-                } else {
-                    stats.skipped += 1;
-                }
+                self.sync_file(&src_path, &dest_path, stats);
             }
         }
         Ok(())
@@ -450,23 +528,188 @@ impl App {
             if dest_path.is_dir() {
                 self.clean_walk(&dest_path, stats);
 
-                if !src_path.exists() {
-                    if fs::remove_dir_all(&dest_path).is_ok() {
+                if (!src_path.exists() || self.is_ignored(&src_path))
+                    && fs::remove_dir_all(&dest_path).is_ok() {
                         stats.cleaned += 1;
                     }
-                } else if self.is_ignored(&src_path) && fs::remove_dir_all(&dest_path).is_ok() {
-                    stats.cleaned += 1;
-                }
             } else {
-                if !src_path.exists() {
-                    if fs::remove_file(&dest_path).is_ok() {
+                if (!src_path.exists() || self.is_ignored(&src_path))
+                    && fs::remove_file(&dest_path).is_ok() {
                         stats.cleaned += 1;
                     }
-                } else if self.is_ignored(&src_path) && fs::remove_file(&dest_path).is_ok() {
-                    stats.cleaned += 1;
-                }
             }
         }
+    }
+
+    pub fn deploy_selected(&mut self) {
+        if let Some(entry) = self.entries.get(self.selected).cloned() {
+            let rel = self.relative_path(&entry.path);
+            let src_path = self.config.sync_dir.join(&rel);
+
+            if !src_path.exists() {
+                self.status = format!("Not in sync dir: {}", rel);
+                return;
+            }
+
+            let mut stats = DeployStats::default();
+
+            if entry.is_dir {
+                let _ = fs::create_dir_all(&entry.path);
+                stats.dirs += 1;
+                if let Err(e) = self.deploy_walk(&src_path, &mut stats) {
+                    self.status = format!("Deploy FAILED: {}", e);
+                    return;
+                }
+            } else {
+                self.deploy_file(&src_path, &entry.path, &mut stats);
+            }
+
+            self.load_entries();
+            self.status = self.format_deploy_status(&stats);
+        }
+    }
+
+    pub fn deploy_all(&mut self) {
+        let sync_dir = self.config.sync_dir.clone();
+
+        if !sync_dir.exists() {
+            self.status = "Nothing to deploy: sync dir does not exist".into();
+            return;
+        }
+
+        let mut stats = DeployStats::default();
+
+        if let Err(e) = self.deploy_walk(&sync_dir, &mut stats) {
+            self.status = format!("Deploy FAILED: {}", e);
+            return;
+        }
+
+        self.load_entries();
+        self.status = self.format_deploy_status(&stats);
+    }
+
+    fn format_deploy_status(&self, stats: &DeployStats) -> String {
+        let mut parts = Vec::new();
+        if stats.copied > 0 {
+            parts.push(format!(
+                "↓ deployed {} ({})",
+                stats.copied,
+                format_size(stats.bytes)
+            ));
+        }
+        if stats.overwritten > 0 {
+            parts.push(format!("overwritten {}", stats.overwritten));
+        }
+        if stats.skipped > 0 {
+            parts.push(format!("up-to-date {}", stats.skipped));
+        }
+        if stats.dirs > 0 {
+            parts.push(format!("dirs {}", stats.dirs));
+        }
+        if stats.errors > 0 {
+            parts.push(format!("errors {}", stats.errors));
+        }
+
+        if parts.is_empty() {
+            "Already up to date ✓".into()
+        } else {
+            parts.join(" │ ")
+        }
+    }
+
+    fn deploy_file(&self, src_path: &Path, dest_path: &Path, stats: &mut DeployStats) {
+        #[cfg(unix)]
+        {
+            if src_path.is_symlink() {
+                if let Ok(target) = fs::read_link(src_path) {
+                    if dest_path.is_symlink()
+                        && let Ok(existing_target) = fs::read_link(dest_path)
+                            && existing_target == target {
+                                stats.skipped += 1;
+                                return;
+                            }
+
+                    let existed = dest_path.exists() || dest_path.is_symlink();
+                    if existed {
+                        let _ = fs::remove_file(dest_path);
+                    }
+
+                    match std::os::unix::fs::symlink(&target, dest_path) {
+                        Ok(_) => {
+                            stats.copied += 1;
+                            if existed {
+                                stats.overwritten += 1;
+                            }
+                        }
+                        Err(_) => stats.errors += 1,
+                    }
+                }
+                return;
+            }
+        }
+
+        let src_meta = match fs::metadata(src_path) {
+            Ok(m) => m,
+            Err(_) => {
+                stats.errors += 1;
+                return;
+            }
+        };
+
+        let should_copy = match fs::metadata(dest_path) {
+            Ok(dest_meta) => {
+                let src_time = src_meta.modified().ok();
+                let dest_time = dest_meta.modified().ok();
+                match (src_time, dest_time) {
+                    (Some(st), Some(dt)) => st > dt || src_meta.len() != dest_meta.len(),
+                    _ => true,
+                }
+            }
+            Err(_) => true,
+        };
+
+        if should_copy {
+            if let Some(parent) = dest_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let existed = dest_path.exists();
+            match fs::copy(src_path, dest_path) {
+                Ok(_) => {
+                    stats.copied += 1;
+                    if existed {
+                        stats.overwritten += 1;
+                    }
+                    stats.bytes += src_meta.len();
+                }
+                Err(_) => stats.errors += 1,
+            }
+        } else {
+            stats.skipped += 1;
+        }
+    }
+
+    fn deploy_walk(&self, dir: &Path, stats: &mut DeployStats) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let src_path = entry.path();
+
+            let rel = match src_path.strip_prefix(&self.config.sync_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let dest_path = self.home_dir.join(rel);
+
+            if src_path.is_dir() {
+                if !dest_path.exists() {
+                    fs::create_dir_all(&dest_path)?;
+                    stats.dirs += 1;
+                }
+                self.deploy_walk(&src_path, stats)?;
+            } else {
+                self.deploy_file(&src_path, &dest_path, stats);
+            }
+        }
+        Ok(())
     }
 }
 

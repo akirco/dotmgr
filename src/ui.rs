@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph},
 };
 
 use crate::{
@@ -23,7 +23,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     draw_header(f, app, chunks[0]);
     draw_list(f, app, chunks[1]);
-    draw_footer(f, chunks[2]);
+    draw_footer(f, app, chunks[2]);
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
@@ -75,29 +75,43 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_list(f: &mut Frame, app: &App, area: Rect) {
-    let top_title = list_title(app);
-
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .title_top(top_title)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue));
-
-    if !app.status.is_empty() {
+    let bottom_title = if app.status.is_empty() {
+        None
+    } else {
         let style = if app.status.contains("FAILED") || app.status.contains("errors") {
             Style::default().fg(Color::Red)
+        } else if app.status.contains("(y/N)") {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else if app.status.contains("Already up to date") {
             Style::default()
                 .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else if app.status.contains("overwritten") {
+            Style::default().fg(Color::Yellow)
+        } else if app.status.contains("deployed") {
+            Style::default()
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else if app.status.contains("cleaned") {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default().fg(Color::Cyan)
         };
-        let bottom_title =
-            Line::from(Span::styled(format!(" {} ", app.status), style)).right_aligned();
-        block = block.title_bottom(bottom_title);
+
+        Some(Line::from(Span::styled(format!(" {} ", app.status), style)))
+    };
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title_top(list_title(app))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Blue));
+
+    if let Some(title) = bottom_title {
+        block = block.title_bottom(title);
     }
 
     if app.entries.is_empty() {
@@ -217,11 +231,33 @@ fn list_title(app: &App) -> String {
     }
 }
 
-fn draw_footer(f: &mut Frame, area: Rect) {
+fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if app.awaiting_confirm.is_some() {
+        let help = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " y ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Confirm │ "),
+            Span::styled(
+                " Esc/other ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" Cancel"),
+        ]))
+        .block(Block::default().padding(Padding::left(1)));
+        f.render_widget(help, area);
+        return;
+    }
+
     let help = Paragraph::new(
         Line::from(vec![
-            Span::styled(" ↑/k↓/j", Style::default().fg(Color::Cyan)),
-            Span::raw(" Nav │"),
             Span::styled(" Enter", Style::default().fg(Color::Cyan)),
             Span::raw(" Open │"),
             Span::styled(" Esc", Style::default().fg(Color::Cyan)),
@@ -231,11 +267,25 @@ fn draw_footer(f: &mut Frame, area: Rect) {
             Span::styled(" p", Style::default().fg(Color::Magenta)),
             Span::raw(" Pending │"),
             Span::styled(" s", Style::default().fg(Color::Green)),
-            Span::raw(" Sync │"),
+            Span::raw(" Sync↑ │"),
+            Span::styled(
+                " S",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" SyncAll │"),
+            Span::styled(" d", Style::default().fg(Color::Yellow)),
+            Span::raw(" Dep↓ │"),
+            Span::styled(
+                " D",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" DepAll │"),
             Span::styled(" a", Style::default().fg(Color::Cyan)),
             Span::raw(" All/Dot │"),
-            Span::styled(" r", Style::default().fg(Color::Cyan)),
-            Span::raw(" Refresh │"),
             Span::styled(" q", Style::default().fg(Color::Red)),
             Span::raw(" Quit"),
         ])
