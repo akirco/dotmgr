@@ -1,49 +1,44 @@
-# Dotfile Manager
+# dotmgr
 
-A TUI tool to manage dotfiles with sync functionality.
+A TUI dotfile manager.
 
 ## Features
 
-- Browse dotfiles in home directory
-- Ignore/unignore files and directories
-- Sync dotfiles to a dedicated directory (default: `~/.dotfiles`)
-- Filter view (all files vs dotfiles only, pending sync items)
+- Browse home directory and sync repo
+- Toggle ignore files
+- Sync (s/S) / Deploy (d/D) files
+- Filter: show all or dotfiles only
 
 ## Controls
 
-| Key     | Action                   |
-| ------- | ------------------------ |
-| ↑/k     | Move up                  |
-| ↓/j     | Move down                |
-| Enter   | Open directory           |
-| Esc     | Go back                  |
-| Space/i | Toggle ignore            |
-| p       | Toggle pending view      |
-| s/S     | Sync to sync_dir         |
-| d/D     | Restore from sync_dir    |
-| a       | Toggle all/dotfiles view |
-| r       | Refresh                  |
-| q       | Quit                     |
+| Key   | Action         |
+|-------|----------------|
+| Tab   | Swap view      |
+| ↑/↓   | Navigate       |
+| s/S   | Sync           |
+| d/D   | Deploy         |
+| a     | Show all       |
+| ^a    | Ignore all     |
+| Space | Toggle ignore  |
+| q     | Quit           |
 
-| 指示器          | 含义                           |
-| --------------- | ------------------------------ |
-| `⊘` (Home视图)  | 文件未同步到仓库               |
-| `⚡` (Sync视图) | 文件在 home 中不存在，需要恢复 |
+## Indicators
+
+| Symbol | Meaning                   |
+|--------|---------------------------|
+| ⊘      | Not synced (Home view)    |
+| ⚡     | Missing in home (Sync)    |
 
 ## Config
 
-Sync directory can be configured in `~/.config/dotmgr/config.toml`:
+`~/.config/dotmgr/config.toml`:
 
 ```toml
-sync_dir = "/home/user/.dotfiles"
+sync_dir = "/path/to/dotfiles"
 ```
 
 ## Install
 
 ```sh
 cargo install --git https://github.com/akirco/dotmgr
-
-or
-# https://github.com/marcosnils/bin
-bin install https://github.com/akirco/dotmgr
 ```

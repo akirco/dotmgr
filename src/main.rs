@@ -34,8 +34,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
@@ -49,6 +49,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 }
 
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
                 match key.code {
                     KeyCode::Char('Q') | KeyCode::Char('q') => app.should_quit = true,
@@ -67,12 +68,12 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     KeyCode::Char('s') if !shift => app.sync_selected(),
                     KeyCode::Char('D') => app.request_confirm("deploy_all"),
                     KeyCode::Char('d') if !shift => app.deploy_selected(),
-                    KeyCode::Char('a') => app.toggle_show_all(),
+                    KeyCode::Char('a') if ctrl => app.ignore_all(),
+                    KeyCode::Char('a') if !ctrl => app.toggle_show_all(),
                     KeyCode::Char('r') => app.refresh(),
                     _ => {}
                 }
             }
-        }
 
         if app.should_quit {
             break;

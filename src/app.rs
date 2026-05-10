@@ -214,7 +214,7 @@ impl App {
                         .config
                         .sync_dir
                         .file_name()
-                        .map_or(false, |n| n.to_string_lossy() == name)
+                        .is_some_and(|n| n.to_string_lossy() == name)
                 {
                     continue;
                 }
@@ -268,8 +268,8 @@ impl App {
             }
         }
 
-        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        dirs.sort_by_key(|a| a.name.to_lowercase());
+        files.sort_by_key(|a| a.name.to_lowercase());
 
         let mut all_entries = dirs;
         all_entries.extend(files);
@@ -308,13 +308,12 @@ impl App {
     }
 
     pub fn enter_directory(&mut self) {
-        if let Some(entry) = self.entries.get(self.selected) {
-            if entry.is_dir {
+        if let Some(entry) = self.entries.get(self.selected)
+            && entry.is_dir {
                 self.current_dir = entry.path.clone();
                 self.selected = 0;
                 self.load_entries();
             }
-        }
     }
 
     pub fn go_back(&mut self) {
@@ -402,6 +401,18 @@ impl App {
         self.show_syncable_only = !self.show_syncable_only;
         self.selected = 0;
         self.load_entries();
+    }
+
+    pub fn ignore_all(&mut self) {
+        for entry in &self.entries {
+            let rel = self.relative_path(&entry.path);
+            if !self.ignored.contains(&rel) {
+                self.ignored.insert(rel);
+            }
+        }
+        self.persist_ignores();
+        self.load_entries();
+        self.status = format!("Ignored {} items", self.entries.len());
     }
 
     pub fn refresh(&mut self) {
@@ -519,14 +530,12 @@ impl App {
         {
             if src_path.is_symlink() {
                 if let Ok(target) = fs::read_link(src_path) {
-                    if dest_path.is_symlink() {
-                        if let Ok(existing_target) = fs::read_link(dest_path) {
-                            if existing_target == target {
+                    if dest_path.is_symlink()
+                        && let Ok(existing_target) = fs::read_link(dest_path)
+                            && existing_target == target {
                                 stats.skipped += 1;
                                 return;
                             }
-                        }
-                    }
                     if dest_path.exists() || dest_path.is_symlink() {
                         let _ = fs::remove_file(dest_path);
                     }
@@ -626,17 +635,15 @@ impl App {
 
             if dest_path.is_dir() {
                 self.clean_walk(&dest_path, stats);
-                if !src_path.exists() || self.is_ignored(&src_path) {
-                    if fs::remove_dir_all(&dest_path).is_ok() {
+                if (!src_path.exists() || self.is_ignored(&src_path))
+                    && fs::remove_dir_all(&dest_path).is_ok() {
                         stats.cleaned += 1;
                     }
-                }
             } else {
-                if !src_path.exists() || self.is_ignored(&src_path) {
-                    if fs::remove_file(&dest_path).is_ok() {
+                if (!src_path.exists() || self.is_ignored(&src_path))
+                    && fs::remove_file(&dest_path).is_ok() {
                         stats.cleaned += 1;
                     }
-                }
             }
         }
     }
@@ -722,14 +729,12 @@ impl App {
         {
             if src_path.is_symlink() {
                 if let Ok(target) = fs::read_link(src_path) {
-                    if dest_path.is_symlink() {
-                        if let Ok(existing_target) = fs::read_link(dest_path) {
-                            if existing_target == target {
+                    if dest_path.is_symlink()
+                        && let Ok(existing_target) = fs::read_link(dest_path)
+                            && existing_target == target {
                                 stats.skipped += 1;
                                 return;
                             }
-                        }
-                    }
                     let existed = dest_path.exists() || dest_path.is_symlink();
                     if existed {
                         let _ = fs::remove_file(dest_path);

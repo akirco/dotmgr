@@ -317,6 +317,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" Deploy │ "),
             Span::styled("a", Style::default().fg(Color::Cyan)),
             Span::raw(" ShowAll │ "),
+            Span::styled("^a", Style::default().fg(Color::Magenta)),
+            Span::raw(" IgnoreAll │ "),
+            Span::styled("Space/i", Style::default().fg(Color::White)),
+            Span::raw(" Ignore │ "),
             Span::styled("q", Style::default().fg(Color::Red)),
             Span::raw(" Quit"),
         ])
