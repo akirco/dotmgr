@@ -1,0 +1,18 @@
+[package]
+name = "dotmgr"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+authors = ["akirco <aki.me.morin@gmail.com>"]
+
+[dependencies]
+ratatui = "0.30.0"
+crossterm = "0.29.0"
+dirs = "6.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.9.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = "symbols"
