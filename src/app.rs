@@ -10,6 +10,7 @@ pub struct FileEntry {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size: u64,
+    pub mirror_exists: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,6 +19,12 @@ pub enum IgnoreStatus {
     NotIgnored,
     DirectlyIgnored,
     InheritedIgnored,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BrowseMode {
+    Home,
+    Sync,
 }
 
 #[derive(Default)]
@@ -51,6 +58,7 @@ pub struct App {
 
     pub show_all: bool,
     pub show_syncable_only: bool,
+    pub browse_mode: BrowseMode,
 
     pub full_count: usize,
     pub full_tracked: usize,
@@ -58,7 +66,6 @@ pub struct App {
 
     pub status: String,
     pub should_quit: bool,
-
     pub awaiting_confirm: Option<String>,
 }
 
@@ -81,6 +88,7 @@ impl App {
             config,
             show_all: false,
             show_syncable_only: false,
+            browse_mode: BrowseMode::Home,
             full_count: 0,
             full_tracked: 0,
             full_ignored: 0,
@@ -92,19 +100,46 @@ impl App {
         app
     }
 
+    pub fn base_dir(&self) -> &Path {
+        match self.browse_mode {
+            BrowseMode::Home => &self.home_dir,
+            BrowseMode::Sync => &self.config.sync_dir,
+        }
+    }
+
     pub fn relative_path(&self, path: &Path) -> String {
-        path.strip_prefix(&self.home_dir)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string()
+        if let Ok(rel) = path.strip_prefix(&self.config.sync_dir) {
+            return rel.to_string_lossy().to_string();
+        }
+        if let Ok(rel) = path.strip_prefix(&self.home_dir) {
+            return rel.to_string_lossy().to_string();
+        }
+        path.to_string_lossy().to_string()
     }
 
     pub fn display_path(&self) -> String {
-        let rel = self.relative_path(&self.current_dir);
-        if rel.is_empty() {
-            "~/".into()
-        } else {
-            format!("~/{}", rel)
+        let base = self.base_dir();
+        let rel = self
+            .current_dir
+            .strip_prefix(base)
+            .unwrap_or(Path::new(""))
+            .to_string_lossy();
+
+        match self.browse_mode {
+            BrowseMode::Home => {
+                if rel.is_empty() {
+                    "~/".into()
+                } else {
+                    format!("~/{}", rel)
+                }
+            }
+            BrowseMode::Sync => {
+                if rel.is_empty() {
+                    "sync:/".into()
+                } else {
+                    format!("sync:/{}", rel)
+                }
+            }
         }
     }
 
@@ -137,6 +172,30 @@ impl App {
         IgnoreStatus::NotIgnored
     }
 
+    pub fn toggle_browse_mode(&mut self) {
+        let old_base = self.base_dir();
+        let rel = self
+            .current_dir
+            .strip_prefix(old_base)
+            .unwrap_or(Path::new(""))
+            .to_path_buf();
+
+        self.browse_mode = match self.browse_mode {
+            BrowseMode::Home => BrowseMode::Sync,
+            BrowseMode::Sync => BrowseMode::Home,
+        };
+
+        let new_base = self.base_dir().to_path_buf();
+        self.current_dir = new_base.join(&rel);
+
+        if !self.current_dir.exists() || !self.current_dir.is_dir() {
+            self.current_dir = new_base.to_path_buf();
+        }
+
+        self.selected = 0;
+        self.load_entries();
+    }
+
     pub fn load_entries(&mut self) {
         let mut dirs = Vec::new();
         let mut files = Vec::new();
@@ -149,7 +208,30 @@ impl App {
                     continue;
                 }
 
-                if !self.show_all && self.current_dir == self.home_dir && !name.starts_with('.') {
+                if self.browse_mode == BrowseMode::Home
+                    && self.current_dir == self.home_dir
+                    && self
+                        .config
+                        .sync_dir
+                        .file_name()
+                        .map_or(false, |n| n.to_string_lossy() == name)
+                {
+                    continue;
+                }
+
+                if self.browse_mode == BrowseMode::Home
+                    && !self.show_all
+                    && self.current_dir == self.home_dir
+                    && !name.starts_with('.')
+                {
+                    continue;
+                }
+
+                if self.browse_mode == BrowseMode::Sync
+                    && !self.show_all
+                    && self.current_dir == self.config.sync_dir
+                    && !name.starts_with('.')
+                {
                     continue;
                 }
 
@@ -162,12 +244,20 @@ impl App {
                     entry.metadata().map(|m| m.len()).unwrap_or(0)
                 };
 
+                let rel = self.relative_path(&path);
+                let mirror_path = match self.browse_mode {
+                    BrowseMode::Home => self.config.sync_dir.join(&rel),
+                    BrowseMode::Sync => self.home_dir.join(&rel),
+                };
+                let mirror_exists = mirror_path.exists();
+
                 let fe = FileEntry {
                     name,
                     path,
                     is_dir,
                     is_symlink,
                     size,
+                    mirror_exists,
                 };
 
                 if is_dir {
@@ -178,8 +268,8 @@ impl App {
             }
         }
 
-        dirs.sort_by_key(|a| a.name.to_lowercase());
-        files.sort_by_key(|a| a.name.to_lowercase());
+        dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
         let mut all_entries = dirs;
         all_entries.extend(files);
@@ -218,12 +308,13 @@ impl App {
     }
 
     pub fn enter_directory(&mut self) {
-        if let Some(entry) = self.entries.get(self.selected)
-            && entry.is_dir {
+        if let Some(entry) = self.entries.get(self.selected) {
+            if entry.is_dir {
                 self.current_dir = entry.path.clone();
                 self.selected = 0;
                 self.load_entries();
             }
+        }
     }
 
     pub fn go_back(&mut self) {
@@ -233,9 +324,11 @@ impl App {
             return;
         }
 
-        if self.current_dir == self.home_dir {
+        let base = self.base_dir();
+        if self.current_dir == base {
             return;
         }
+
         let child_name = self
             .current_dir
             .file_name()
@@ -340,28 +433,35 @@ impl App {
 
     pub fn sync_selected(&mut self) {
         if let Some(entry) = self.entries.get(self.selected).cloned() {
-            if self.is_ignored(&entry.path) {
-                self.status = format!("Ignored: {}", self.relative_path(&entry.path));
+            let rel = self.relative_path(&entry.path);
+            let src_path = self.home_dir.join(&rel);
+            let dest_path = self.config.sync_dir.join(&rel);
+
+            if !src_path.exists() {
+                self.status = format!("Not in home: {}", rel);
                 return;
             }
 
-            let rel = self.relative_path(&entry.path);
-            let dest_path = self.config.sync_dir.join(&rel);
+            if self.is_ignored(&src_path) {
+                self.status = format!("Ignored: {}", rel);
+                return;
+            }
 
             let mut stats = SyncStats::default();
 
-            if entry.is_dir {
+            if src_path.is_dir() {
                 let _ = fs::create_dir_all(&dest_path);
                 stats.dirs += 1;
-                if let Err(e) = self.sync_walk(&entry.path, &mut stats) {
+                if let Err(e) = self.sync_walk(&src_path, &mut stats) {
                     self.status = format!("Sync FAILED: {}", e);
                     return;
                 }
                 self.clean_walk(&dest_path, &mut stats);
             } else {
-                self.sync_file(&entry.path, &dest_path, &mut stats);
+                self.sync_file(&src_path, &dest_path, &mut stats);
             }
 
+            self.load_entries();
             self.status = self.format_sync_status(&stats);
         }
     }
@@ -382,6 +482,7 @@ impl App {
         }
 
         self.clean_walk(&sync_dir, &mut stats);
+        self.load_entries();
         self.status = self.format_sync_status(&stats);
     }
 
@@ -406,7 +507,6 @@ impl App {
         if stats.errors > 0 {
             parts.push(format!("errors {}", stats.errors));
         }
-
         if parts.is_empty() {
             "Already up to date ✓".into()
         } else {
@@ -419,20 +519,19 @@ impl App {
         {
             if src_path.is_symlink() {
                 if let Ok(target) = fs::read_link(src_path) {
-                    if dest_path.is_symlink()
-                        && let Ok(existing_target) = fs::read_link(dest_path)
-                            && existing_target == target {
+                    if dest_path.is_symlink() {
+                        if let Ok(existing_target) = fs::read_link(dest_path) {
+                            if existing_target == target {
                                 stats.skipped += 1;
                                 return;
                             }
-
+                        }
+                    }
                     if dest_path.exists() || dest_path.is_symlink() {
                         let _ = fs::remove_file(dest_path);
                     }
                     match std::os::unix::fs::symlink(&target, dest_path) {
-                        Ok(_) => {
-                            stats.copied += 1;
-                        }
+                        Ok(_) => stats.copied += 1,
                         Err(_) => stats.errors += 1,
                     }
                 }
@@ -482,7 +581,7 @@ impl App {
             let name = entry.file_name().to_string_lossy().to_string();
             let src_path = entry.path();
 
-            if dir == self.home_dir && !name.starts_with('.') {
+            if dir == self.home_dir && !self.show_all && !name.starts_with('.') {
                 continue;
             }
 
@@ -527,16 +626,17 @@ impl App {
 
             if dest_path.is_dir() {
                 self.clean_walk(&dest_path, stats);
-
-                if (!src_path.exists() || self.is_ignored(&src_path))
-                    && fs::remove_dir_all(&dest_path).is_ok() {
+                if !src_path.exists() || self.is_ignored(&src_path) {
+                    if fs::remove_dir_all(&dest_path).is_ok() {
                         stats.cleaned += 1;
                     }
+                }
             } else {
-                if (!src_path.exists() || self.is_ignored(&src_path))
-                    && fs::remove_file(&dest_path).is_ok() {
+                if !src_path.exists() || self.is_ignored(&src_path) {
+                    if fs::remove_file(&dest_path).is_ok() {
                         stats.cleaned += 1;
                     }
+                }
             }
         }
     }
@@ -545,23 +645,24 @@ impl App {
         if let Some(entry) = self.entries.get(self.selected).cloned() {
             let rel = self.relative_path(&entry.path);
             let src_path = self.config.sync_dir.join(&rel);
+            let dest_path = self.home_dir.join(&rel);
 
             if !src_path.exists() {
-                self.status = format!("Not in sync dir: {}", rel);
+                self.status = format!("Not in sync repo: {}", rel);
                 return;
             }
 
             let mut stats = DeployStats::default();
 
-            if entry.is_dir {
-                let _ = fs::create_dir_all(&entry.path);
+            if src_path.is_dir() {
+                let _ = fs::create_dir_all(&dest_path);
                 stats.dirs += 1;
                 if let Err(e) = self.deploy_walk(&src_path, &mut stats) {
                     self.status = format!("Deploy FAILED: {}", e);
                     return;
                 }
             } else {
-                self.deploy_file(&src_path, &entry.path, &mut stats);
+                self.deploy_file(&src_path, &dest_path, &mut stats);
             }
 
             self.load_entries();
@@ -609,7 +710,6 @@ impl App {
         if stats.errors > 0 {
             parts.push(format!("errors {}", stats.errors));
         }
-
         if parts.is_empty() {
             "Already up to date ✓".into()
         } else {
@@ -622,18 +722,18 @@ impl App {
         {
             if src_path.is_symlink() {
                 if let Ok(target) = fs::read_link(src_path) {
-                    if dest_path.is_symlink()
-                        && let Ok(existing_target) = fs::read_link(dest_path)
-                            && existing_target == target {
+                    if dest_path.is_symlink() {
+                        if let Ok(existing_target) = fs::read_link(dest_path) {
+                            if existing_target == target {
                                 stats.skipped += 1;
                                 return;
                             }
-
+                        }
+                    }
                     let existed = dest_path.exists() || dest_path.is_symlink();
                     if existed {
                         let _ = fs::remove_file(dest_path);
                     }
-
                     match std::os::unix::fs::symlink(&target, dest_path) {
                         Ok(_) => {
                             stats.copied += 1;

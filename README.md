@@ -19,10 +19,16 @@ A TUI tool to manage dotfiles with sync functionality.
 | Esc     | Go back                  |
 | Space/i | Toggle ignore            |
 | p       | Toggle pending view      |
-| s       | Sync to sync_dir         |
+| s/S     | Sync to sync_dir         |
+| d/D     | Restore from sync_dir    |
 | a       | Toggle all/dotfiles view |
 | r       | Refresh                  |
 | q       | Quit                     |
+
+| 指示器          | 含义                           |
+| --------------- | ------------------------------ |
+| `⊘` (Home视图)  | 文件未同步到仓库               |
+| `⚡` (Sync视图) | 文件在 home 中不存在，需要恢复 |
 
 ## Config
 

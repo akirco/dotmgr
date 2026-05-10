@@ -34,8 +34,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()? {
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
@@ -60,6 +60,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     KeyCode::PageDown => app.page_down(),
                     KeyCode::Enter => app.enter_directory(),
                     KeyCode::Esc | KeyCode::Backspace => app.go_back(),
+                    KeyCode::Tab => app.toggle_browse_mode(),
                     KeyCode::Char(' ') | KeyCode::Char('i') => app.toggle_ignore(),
                     KeyCode::Char('p') => app.toggle_syncable_only(),
                     KeyCode::Char('S') => app.request_confirm("sync_all"),
@@ -71,6 +72,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     _ => {}
                 }
             }
+        }
 
         if app.should_quit {
             break;

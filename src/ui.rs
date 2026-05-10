@@ -3,11 +3,14 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState,
+    },
 };
 
 use crate::{
-    app::{App, IgnoreStatus, format_size},
+    app::{App, BrowseMode, IgnoreStatus, format_size},
     config::APP_NAME,
 };
 
@@ -31,12 +34,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(APP_NAME)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue))
-        .title_style(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        );
+        .border_style(Style::default().fg(Color::Blue));
 
     let inner_area = outer_block.inner(area);
     f.render_widget(outer_block, area);
@@ -53,11 +51,20 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     )];
 
-    if app.current_dir != app.home_dir && app.is_ignored(&app.current_dir) {
+    if app.current_dir != *app.base_dir() && app.is_ignored(&app.current_dir) {
         spans.push(Span::styled(
             "  ⚠ INHERITED IGNORE",
             Style::default()
                 .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    if app.show_syncable_only {
+        spans.push(Span::styled(
+            "  [PENDING]",
+            Style::default()
+                .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -106,9 +113,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .title_top(list_title(app))
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(Style::default().fg(Color::Blue))
+        .title_top(list_title(app));
 
     if let Some(title) = bottom_title {
         block = block.title_bottom(title);
@@ -180,6 +187,20 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 }
             };
 
+            let mirror_span = if !entry.mirror_exists {
+                match app.browse_mode {
+                    BrowseMode::Home => {
+                        Some(Span::styled("  ⊘", Style::default().fg(Color::Yellow)))
+                    }
+                    BrowseMode::Sync => Some(Span::styled(
+                        "  ⚡",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )),
+                }
+            } else {
+                None
+            };
+
             let mut line_spans = vec![
                 Span::styled(format!("[{}]", check_char), check_style),
                 Span::styled(" ", Style::default()),
@@ -192,6 +213,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
             if let Some(tag) = tag_span {
                 line_spans.push(tag);
+            }
+            if let Some(mir) = mirror_span {
+                line_spans.push(mir);
             }
 
             let mut item = ListItem::new(Line::from(line_spans));
@@ -206,17 +230,37 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items).block(block);
 
-    let mut state = ListState::default();
-    state.select(Some(app.selected));
-    f.render_stateful_widget(list, area, &mut state);
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.selected));
+    f.render_stateful_widget(list, area, &mut list_state);
+
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    if app.entries.len() > visible_rows {
+        let scrollbar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("╮"))
+            .end_symbol(Some("╯"))
+            .thumb_style(Style::default().fg(Color::Blue));
+
+        let mut scrollbar_state = ScrollbarState::default();
+        scrollbar_state = scrollbar_state
+            .content_length(app.entries.len())
+            .position(app.selected);
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
 }
 
 fn list_title(app: &App) -> String {
     let mode = if app.show_all { "ALL" } else { "DOT" };
+    let view = match app.browse_mode {
+        BrowseMode::Home => "HOME",
+        BrowseMode::Sync => "SYNC",
+    };
 
     if app.show_syncable_only {
         format!(
-            " Pending [{}] {}/{} shown │ tracked:{} ignored:{} ",
+            " {} [{}] {}/{} shown │ tracked:{} ignored:{} ",
+            view,
             mode,
             app.entries.len(),
             app.full_count,
@@ -225,8 +269,8 @@ fn list_title(app: &App) -> String {
         )
     } else {
         format!(
-            " Files [{}] {} items │ tracked:{} ignored:{} ",
-            mode, app.full_count, app.full_tracked, app.full_ignored,
+            " {} [{}] {} items │ tracked:{} ignored:{} ",
+            view, mode, app.full_count, app.full_tracked, app.full_ignored,
         )
     }
 }
@@ -258,35 +302,22 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let help = Paragraph::new(
         Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(Color::Cyan)),
-            Span::raw(" Open │"),
-            Span::styled(" Esc", Style::default().fg(Color::Cyan)),
-            Span::raw(" Back │"),
-            Span::styled(" Space/i", Style::default().fg(Color::Cyan)),
-            Span::raw(" Ignore │"),
-            Span::styled(" p", Style::default().fg(Color::Magenta)),
-            Span::raw(" Pending │"),
-            Span::styled(" s", Style::default().fg(Color::Green)),
-            Span::raw(" Sync↑ │"),
             Span::styled(
-                " S",
+                "Tab",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" SyncAll │"),
-            Span::styled(" d", Style::default().fg(Color::Yellow)),
-            Span::raw(" Dep↓ │"),
-            Span::styled(
-                " D",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" DepAll │"),
-            Span::styled(" a", Style::default().fg(Color::Cyan)),
-            Span::raw(" All/Dot │"),
-            Span::styled(" q", Style::default().fg(Color::Red)),
+            Span::raw(" Swap │ "),
+            Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+            Span::raw(" Nav │ "),
+            Span::styled("s/S", Style::default().fg(Color::Green)),
+            Span::raw(" Sync │ "),
+            Span::styled("d/D", Style::default().fg(Color::Yellow)),
+            Span::raw(" Deploy │ "),
+            Span::styled("a", Style::default().fg(Color::Cyan)),
+            Span::raw(" ShowAll │ "),
+            Span::styled("q", Style::default().fg(Color::Red)),
             Span::raw(" Quit"),
         ])
         .centered(),
