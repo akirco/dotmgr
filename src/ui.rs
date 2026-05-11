@@ -146,7 +146,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 IgnoreStatus::NotIgnored => (" ", Style::default().fg(Color::Green)),
                 IgnoreStatus::DirectlyIgnored => (
                     "✗",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 IgnoreStatus::InheritedIgnored => ("~", Style::default().fg(Color::Yellow)),
             };
@@ -173,7 +175,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
             let tag_span = match status {
                 IgnoreStatus::DirectlyIgnored => {
-                    Some(Span::styled("  IGN", Style::default().fg(Color::Red)))
+                    Some(Span::styled("  IGN", Style::default().fg(Color::Magenta)))
                 }
                 IgnoreStatus::InheritedIgnored => {
                     Some(Span::styled("  INH", Style::default().fg(Color::Yellow)))
@@ -189,9 +191,12 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
             let mirror_span = if !entry.mirror_exists {
                 match app.browse_mode {
-                    BrowseMode::Home => {
-                        Some(Span::styled("  ⊘", Style::default().fg(Color::Yellow)))
-                    }
+                    BrowseMode::Home => Some(Span::styled(
+                        "  ⊘",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )),
                     BrowseMode::Sync => Some(Span::styled(
                         "  ⚡",
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
