@@ -6,8 +6,9 @@ pub const APP_NAME: &str = "dotmgr";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
-    /// 同步目标目录，文件结构镜像 $HOME
     pub sync_dir: PathBuf,
+    #[serde(default)]
+    pub synced_ignores: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -15,6 +16,15 @@ impl Default for AppConfig {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
             sync_dir: home.join(".dotfiles"),
+            synced_ignores: vec![
+                ".git".to_string(),
+                ".github".to_string(),
+                "README.md".to_string(),
+                "LICENSE".to_string(),
+                "Makefile".to_string(),
+                ".gitignore".to_string(),
+                ".gitattributes".to_string(),
+            ],
         }
     }
 }
@@ -27,21 +37,19 @@ fn config_dir() -> PathBuf {
 
 pub fn load_config() -> AppConfig {
     let path = config_dir().join("config.toml");
+    let default_cfg = AppConfig::default();
     if path.exists() {
         let content = fs::read_to_string(&path).unwrap_or_default();
-        toml::from_str(&content).unwrap_or_default()
-    } else {
-        let cfg = AppConfig::default();
-        save_config(&cfg);
+        let mut cfg: AppConfig = toml::from_str(&content).unwrap_or_default();
+        if cfg.sync_dir.as_os_str().is_empty() {
+            cfg.sync_dir = default_cfg.sync_dir;
+        }
+        if cfg.synced_ignores.is_empty() {
+            cfg.synced_ignores = default_cfg.synced_ignores;
+        }
         cfg
-    }
-}
-
-pub fn save_config(cfg: &AppConfig) {
-    let dir = config_dir();
-    let _ = fs::create_dir_all(&dir);
-    if let Ok(content) = toml::to_string_pretty(cfg) {
-        let _ = fs::write(dir.join("config.toml"), content);
+    } else {
+        default_cfg
     }
 }
 
@@ -56,10 +64,24 @@ pub fn load_ignores() -> Vec<String> {
         let content = fs::read_to_string(&path).unwrap_or_default();
         toml::from_str::<IgnoresFile>(&content)
             .map(|f| f.ignored)
-            .unwrap_or_default()
+            .unwrap_or_else(|_| default_ignores())
     } else {
-        vec![]
+        let ignores = default_ignores();
+        save_ignores(&ignores);
+        ignores
     }
+}
+
+fn default_ignores() -> Vec<String> {
+    vec![
+        "node_modules".to_string(),
+        "target".to_string(),
+        "__pycache__".to_string(),
+        ".venv".to_string(),
+        "venv".to_string(),
+        ".DS_Store".to_string(),
+        "Thumbs.db".to_string(),
+    ]
 }
 
 pub fn save_ignores(ignored: &[String]) {

@@ -75,7 +75,6 @@ impl App {
         let config = config::load_config();
         let ignored_paths = config::load_ignores();
         let mut ignored: HashSet<String> = ignored_paths.into_iter().collect();
-        // 默认忽略 sync_dir
         if let Ok(rel) = config.sync_dir.strip_prefix(&home_dir) {
             ignored.insert(rel.to_string_lossy().to_string());
         }
@@ -230,6 +229,14 @@ impl App {
                 if self.browse_mode == BrowseMode::Sync
                     && !self.show_all
                     && self.current_dir == self.config.sync_dir
+                    && self.config.synced_ignores.contains(&name)
+                {
+                    continue;
+                }
+
+                if self.browse_mode == BrowseMode::Sync
+                    && !self.show_all
+                    && self.current_dir == self.config.sync_dir
                     && !name.starts_with('.')
                 {
                     continue;
@@ -309,11 +316,12 @@ impl App {
 
     pub fn enter_directory(&mut self) {
         if let Some(entry) = self.entries.get(self.selected)
-            && entry.is_dir {
-                self.current_dir = entry.path.clone();
-                self.selected = 0;
-                self.load_entries();
-            }
+            && entry.is_dir
+        {
+            self.current_dir = entry.path.clone();
+            self.selected = 0;
+            self.load_entries();
+        }
     }
 
     pub fn go_back(&mut self) {
@@ -532,10 +540,11 @@ impl App {
                 if let Ok(target) = fs::read_link(src_path) {
                     if dest_path.is_symlink()
                         && let Ok(existing_target) = fs::read_link(dest_path)
-                            && existing_target == target {
-                                stats.skipped += 1;
-                                return;
-                            }
+                        && existing_target == target
+                    {
+                        stats.skipped += 1;
+                        return;
+                    }
                     if dest_path.exists() || dest_path.is_symlink() {
                         let _ = fs::remove_file(dest_path);
                     }
@@ -602,6 +611,10 @@ impl App {
                 continue;
             }
 
+            if self.config.synced_ignores.contains(&name) {
+                continue;
+            }
+
             let rel = src_path.strip_prefix(&self.home_dir).unwrap_or(&src_path);
             let dest_path = self.config.sync_dir.join(rel);
 
@@ -636,14 +649,16 @@ impl App {
             if dest_path.is_dir() {
                 self.clean_walk(&dest_path, stats);
                 if (!src_path.exists() || self.is_ignored(&src_path))
-                    && fs::remove_dir_all(&dest_path).is_ok() {
-                        stats.cleaned += 1;
-                    }
+                    && fs::remove_dir_all(&dest_path).is_ok()
+                {
+                    stats.cleaned += 1;
+                }
             } else {
                 if (!src_path.exists() || self.is_ignored(&src_path))
-                    && fs::remove_file(&dest_path).is_ok() {
-                        stats.cleaned += 1;
-                    }
+                    && fs::remove_file(&dest_path).is_ok()
+                {
+                    stats.cleaned += 1;
+                }
             }
         }
     }
@@ -731,10 +746,11 @@ impl App {
                 if let Ok(target) = fs::read_link(src_path) {
                     if dest_path.is_symlink()
                         && let Ok(existing_target) = fs::read_link(dest_path)
-                            && existing_target == target {
-                                stats.skipped += 1;
-                                return;
-                            }
+                        && existing_target == target
+                    {
+                        stats.skipped += 1;
+                        return;
+                    }
                     let existed = dest_path.exists() || dest_path.is_symlink();
                     if existed {
                         let _ = fs::remove_file(dest_path);
@@ -797,6 +813,11 @@ impl App {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let src_path = entry.path();
+            let name = src_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            if self.config.synced_ignores.contains(&name.to_string()) {
+                continue;
+            }
 
             let rel = match src_path.strip_prefix(&self.config.sync_dir) {
                 Ok(r) => r,

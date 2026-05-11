@@ -11,23 +11,23 @@ A TUI dotfile manager.
 
 ## Controls
 
-| Key   | Action         |
-|-------|----------------|
-| Tab   | Swap view      |
-| ↑/↓   | Navigate       |
-| s/S   | Sync           |
-| d/D   | Deploy         |
-| a     | Show all       |
-| ^a    | Ignore all     |
-| Space | Toggle ignore  |
-| q     | Quit           |
+| Key   | Action        |
+| ----- | ------------- |
+| Tab   | Swap view     |
+| ↑/↓   | Navigate      |
+| s/S   | Sync          |
+| d/D   | Deploy        |
+| a     | Show all      |
+| ^a    | Ignore all    |
+| Space | Toggle ignore |
+| q     | Quit          |
 
 ## Indicators
 
-| Symbol | Meaning                   |
-|--------|---------------------------|
-| ⊘      | Not synced (Home view)    |
-| ⚡     | Missing in home (Sync)    |
+| Symbol | Meaning                |
+| ------ | ---------------------- |
+| ⊘      | Not synced (Home view) |
+| ⚡     | Missing in home (Sync) |
 
 ## Config
 
@@ -35,6 +35,7 @@ A TUI dotfile manager.
 
 ```toml
 sync_dir = "/path/to/dotfiles"
+synced_ignores = [".git", ".github", "README.md", "LICENSE"]
 ```
 
 ## Install
