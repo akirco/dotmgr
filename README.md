@@ -46,5 +46,5 @@ cargo install --git https://github.com/akirco/dotmgr
 # or
 #https://github.com/marcosnils/bin
 
-bin install https://github.com/akirco/tmdb
+bin install https://github.com/akirco/dotmgr
 ```
