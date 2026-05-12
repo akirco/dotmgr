@@ -10,8 +10,9 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, BrowseMode, IgnoreStatus, format_size},
+    app::{App, BrowseMode, IgnoreStatus},
     config::APP_NAME,
+    utils::format_size,
 };
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -206,6 +207,15 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 None
             };
 
+            let diff_span = if entry.has_diff {
+                Some(Span::styled(
+                    " ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                None
+            };
+
             let mut line_spans = vec![
                 Span::styled(format!("[{}]", check_char), check_style),
                 Span::styled(" ", Style::default()),
@@ -221,6 +231,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
             }
             if let Some(mir) = mirror_span {
                 line_spans.push(mir);
+            }
+            if let Some(diff) = diff_span {
+                line_spans.push(diff);
             }
 
             let mut item = ListItem::new(Line::from(line_spans));

@@ -1,7 +1,7 @@
 use crate::config;
+use crate::utils::{format_size, hash_file_quick};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -12,6 +12,7 @@ pub struct FileEntry {
     pub is_symlink: bool,
     pub size: u64,
     pub mirror_exists: bool,
+    pub has_diff: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -258,6 +259,7 @@ impl App {
                     BrowseMode::Sync => self.home_dir.join(&rel),
                 };
                 let mirror_exists = mirror_path.exists();
+                let has_diff = !is_dir && mirror_exists && self.has_file_diff(&path, &mirror_path);
 
                 let fe = FileEntry {
                     name,
@@ -266,6 +268,7 @@ impl App {
                     is_symlink,
                     size,
                     mirror_exists,
+                    has_diff,
                 };
 
                 if is_dir {
@@ -856,56 +859,28 @@ impl App {
         }
         Ok(())
     }
-}
 
-pub fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-    if bytes >= GB {
-        format!("{:.1}G", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{}B", bytes)
-    }
-}
+    fn has_file_diff(&self, path_a: &Path, path_b: &Path) -> bool {
+        let meta_a = match fs::metadata(path_a) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        let meta_b = match fs::metadata(path_b) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
 
-fn hash_file_quick(path: &Path, size: u64) -> Result<[u8; 32], std::io::Error> {
-    use sha2::{Digest, Sha256};
-    use std::io::{Seek, SeekFrom};
-
-    if size <= 1024 * 1024 {
-        let mut file = fs::File::open(path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 8192];
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-        Ok(hasher.finalize().into())
-    } else {
-        let mut file = fs::File::open(path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 1024 * 1024];
-        let bytes_read = file.read(&mut buffer)?;
-        hasher.update(&buffer[..bytes_read]);
-
-        if let Ok(metadata) = file.metadata() {
-            let file_size = metadata.len();
-            if file_size > 1024 * 1024 {
-                file.seek(SeekFrom::End(-(1024 * 1024) as i64))?;
-                let mut end_buffer = vec![0u8; 1024 * 1024];
-                let bytes_read = file.read(&mut end_buffer)?;
-                hasher.update(&end_buffer[..bytes_read]);
-            }
+        if meta_a.len() != meta_b.len() {
+            return true;
         }
 
-        Ok(hasher.finalize().into())
+        if let (Ok(hash_a), Ok(hash_b)) = (
+            hash_file_quick(path_a, meta_a.len()),
+            hash_file_quick(path_b, meta_b.len()),
+        ) {
+            return hash_a != hash_b;
+        }
+
+        false
     }
 }

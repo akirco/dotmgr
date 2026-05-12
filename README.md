@@ -42,4 +42,9 @@ synced_ignores = [".git", ".github", "README.md", "LICENSE"]
 
 ```sh
 cargo install --git https://github.com/akirco/dotmgr
+
+# or
+#https://github.com/marcosnils/bin
+
+bin install https://github.com/akirco/tmdb
 ```
