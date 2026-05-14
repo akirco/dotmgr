@@ -8,6 +8,7 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState,
     },
 };
+use tui_spinner::FluxFrames;
 
 use crate::{
     app::{App, BrowseMode, IgnoreStatus},
@@ -35,7 +36,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(APP_NAME)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(Style::default().fg(Color::Rgb(4, 177, 207)));
 
     let inner_area = outer_block.inner(area);
     f.render_widget(outer_block, area);
@@ -65,7 +66,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(
             "  [PENDING]",
             Style::default()
-                .fg(Color::Magenta)
+                .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -115,7 +116,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Blue))
+        .border_style(Style::default().fg(Color::Rgb(89, 165, 99)))
         .title_top(list_title(app));
 
     if let Some(title) = bottom_title {
@@ -148,7 +149,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 IgnoreStatus::DirectlyIgnored => (
                     "✗",
                     Style::default()
-                        .fg(Color::Magenta)
+                        .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
                 IgnoreStatus::InheritedIgnored => ("~", Style::default().fg(Color::Yellow)),
@@ -176,7 +177,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 
             let tag_span = match status {
                 IgnoreStatus::DirectlyIgnored => {
-                    Some(Span::styled("  IGN", Style::default().fg(Color::Magenta)))
+                    Some(Span::styled("  IGN", Style::default().fg(Color::Yellow)))
                 }
                 IgnoreStatus::InheritedIgnored => {
                     Some(Span::styled("  INH", Style::default().fg(Color::Yellow)))
@@ -258,7 +259,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
             .orientation(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("╮"))
             .end_symbol(Some("╯"))
-            .thumb_style(Style::default().fg(Color::Blue));
+            .thumb_style(Style::default().fg(Color::Rgb(89, 165, 99)));
 
         let mut scrollbar_state = ScrollbarState::default();
         scrollbar_state = scrollbar_state
@@ -294,6 +295,24 @@ fn list_title(app: &App) -> String {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if app.pending {
+        let frames = FluxFrames::CLASSIC;
+        let idx = (app.tick / 2) as usize % frames.len();
+        let ch = frames[idx];
+        let line = Line::from(vec![
+            Span::styled(
+                ch.to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Working...", Style::default().fg(Color::DarkGray)),
+        ]);
+        let p = Paragraph::new(line).block(Block::default().padding(Padding::left(1)));
+        f.render_widget(p, area);
+        return;
+    }
+
     if app.awaiting_confirm.is_some() {
         let help = Paragraph::new(Line::from(vec![
             Span::styled(
@@ -331,6 +350,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" Nav │ "),
             Span::styled("s/S", Style::default().fg(Color::Green)),
             Span::raw(" Sync │ "),
+            Span::styled("v", Style::default().fg(Color::White)),
+            Span::raw(" Diff │ "),
             Span::styled("d/D", Style::default().fg(Color::Yellow)),
             Span::raw(" Deploy │ "),
             Span::styled("a", Style::default().fg(Color::Cyan)),

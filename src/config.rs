@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub sync_dir: PathBuf,
     #[serde(default)]
     pub synced_ignores: Vec<String>,
+    #[serde(default)]
+    pub editor: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -25,6 +27,7 @@ impl Default for AppConfig {
                 ".gitignore".to_string(),
                 ".gitattributes".to_string(),
             ],
+            editor: None,
         }
     }
 }
